@@ -1,6 +1,7 @@
 package router
 
 import (
+	"encoding/json"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -14,9 +15,10 @@ import (
 	"github.com/Lix-09991/neon-saga-api/internal/models"
 	"github.com/Lix-09991/neon-saga-api/internal/repository"
 	"github.com/Lix-09991/neon-saga-api/internal/service"
+	"github.com/Lix-09991/neon-saga-api/internal/ws"
 )
 
-func New(cfg *config.Config, pool *pgxpool.Pool) http.Handler {
+func New(cfg *config.Config, pool *pgxpool.Pool, wsHub *ws.Hub) http.Handler {
 	r := chi.NewRouter()
 
 	// --- Глобальные мидлвары ---
@@ -68,7 +70,7 @@ func New(cfg *config.Config, pool *pgxpool.Pool) http.Handler {
 		_, _ = w.Write([]byte("ok"))
 	})
 
-	// --- Статика: /static/videos/..., /static/images/... ---
+	// --- Статика ---
 	fs := http.FileServer(http.Dir("./uploads"))
 	r.Handle("/static/*", http.StripPrefix("/static/", fs))
 
@@ -86,6 +88,17 @@ func New(cfg *config.Config, pool *pgxpool.Pool) http.Handler {
 		r.Route("/auth", func(r chi.Router) {
 			r.Post("/register", authHandler.Register)
 			r.Post("/login", authHandler.Login)
+			r.Post("/logout", authHandler.Logout)
+
+			r.Group(func(r chi.Router) {
+				r.Use(custommw.RequireAuth([]byte(cfg.JWTSecret)))
+				r.Get("/me", authHandler.Me)
+			})
+		})
+
+		// WebSocket (публичный)
+		r.Get("/ws", func(w http.ResponseWriter, r *http.Request) {
+			ws.ServeWs(wsHub, w, r)
 		})
 
 		// Anime
@@ -116,6 +129,20 @@ func New(cfg *config.Config, pool *pgxpool.Pool) http.Handler {
 			// ============================================================
 			r.Group(func(r chi.Router) {
 				r.Use(custommw.RequireRole(models.RoleAdmin, models.RoleModerator))
+
+				// Рассылка уведомлений через WebSocket
+				r.Post("/admin/broadcast", func(w http.ResponseWriter, r *http.Request) {
+					var body struct {
+						Text string `json:"text"`
+					}
+					if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+						http.Error(w, `{"error":"invalid JSON"}`, http.StatusBadRequest)
+						return
+					}
+					wsHub.SendGlobal(body.Text)
+					w.Header().Set("Content-Type", "application/json")
+					_, _ = w.Write([]byte(`{"status":"sent"}`))
+				})
 
 				// Anime CRUD
 				r.Post("/anime", animeHandler.Create)

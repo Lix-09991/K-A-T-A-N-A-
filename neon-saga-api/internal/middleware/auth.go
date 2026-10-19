@@ -20,13 +20,24 @@ const UserContextKey contextKey = "user"
 func RequireAuth(jwtSecret []byte) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// 1. Пробуем Authorization header
+			tokenStr := ""
 			authHeader := r.Header.Get("Authorization")
-			if authHeader == "" || !strings.HasPrefix(authHeader, "Bearer ") {
+			if authHeader != "" && strings.HasPrefix(authHeader, "Bearer ") {
+				tokenStr = strings.TrimPrefix(authHeader, "Bearer ")
+			} else {
+				// 2. Fallback на cookie
+				cookie, err := r.Cookie("token")
+				if err == nil {
+					tokenStr = cookie.Value
+				}
+			}
+
+			if tokenStr == "" {
 				writeJSONError(w, http.StatusUnauthorized, "требуется авторизация")
 				return
 			}
 
-			tokenStr := strings.TrimPrefix(authHeader, "Bearer ")
 			token, err := jwt.Parse(tokenStr, func(t *jwt.Token) (interface{}, error) {
 				if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
 					return nil, jwt.ErrSignatureInvalid
@@ -47,7 +58,7 @@ func RequireAuth(jwtSecret []byte) func(http.Handler) http.Handler {
 			sub, _ := claims["sub"].(string)
 			userID, err := uuid.Parse(sub)
 			if err != nil {
-				writeJSONError(w, http.StatusUnauthorized, "невалидный sub в токене")
+				writeJSONError(w, http.StatusUnauthorized, "невалидный sub")
 				return
 			}
 

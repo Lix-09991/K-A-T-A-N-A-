@@ -44,4 +44,5 @@ type Anime struct {
 	FranchiseID   *uuid.UUID  `json:"franchise_id,omitempty"`
 	CreatedAt     time.Time   `json:"created_at"`
 	UpdatedAt     time.Time   `json:"updated_at"`
+	NextEpisodeAt *time.Time  `json:"next_episode_at,omitempty"`
 }

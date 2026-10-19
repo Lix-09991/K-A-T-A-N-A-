@@ -1,0 +1,1 @@
+ALTER TABLE anime ADD COLUMN next_episode_at TIMESTAMPTZ;

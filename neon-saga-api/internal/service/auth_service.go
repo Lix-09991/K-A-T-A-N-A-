@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/google/uuid"
 
 	"github.com/Lix-09991/neon-saga-api/internal/models"
 	"github.com/Lix-09991/neon-saga-api/internal/repository"
@@ -113,4 +114,8 @@ func (s *AuthService) generateToken(u *models.User) (string, error) {
 		return "", fmt.Errorf("подпись токена: %w", err)
 	}
 	return signed, nil
+}
+
+func (s *AuthService) GetUserByID(ctx context.Context, id uuid.UUID) (*models.User, error) {
+	return s.userRepo.FindByID(ctx, id)
 }

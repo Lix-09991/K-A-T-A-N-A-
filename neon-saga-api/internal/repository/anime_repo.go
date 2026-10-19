@@ -33,7 +33,7 @@ func NewAnimeRepository(pool *pgxpool.Pool) *AnimeRepository {
 type ListFilter struct {
 	Search      string
 	Genres      []string
-	GenresMode  string // "or" (default) | "and"
+	GenresMode  string
 	Countries   []string
 	Types       []string
 	Statuses    []string
@@ -43,8 +43,8 @@ type ListFilter struct {
 	FranchiseID *uuid.UUID
 	Limit       int
 	Offset      int
-	Sort        string // created_at | updated_at | views | rating | year | comments_count | title
-	Order       string // asc | desc
+	Sort        string
+	Order       string
 }
 
 var allowedSorts = map[string]string{
@@ -57,9 +57,6 @@ var allowedSorts = map[string]string{
 	"title":          "title",
 }
 
-// buildWhere собирает WHERE + args, исключая одну из групп фильтров
-// (нужно для disjunctive faceting: facet по жанрам строится без фильтра по жанрам).
-// exclude: "" | "genres" | "countries" | "types" | "statuses" | "years" | "rating"
 func (r *AnimeRepository) buildWhere(f ListFilter, exclude string) (string, []any) {
 	var parts []string
 	var args []any
@@ -69,11 +66,9 @@ func (r *AnimeRepository) buildWhere(f ListFilter, exclude string) (string, []an
 	}
 
 	if f.Search != "" {
-		// trigram similarity + ILIKE через GIN индекс
 		args = append(args, "%"+f.Search+"%")
 		n := len(args)
-		parts = append(parts,
-			fmt.Sprintf("(title ILIKE $%d OR COALESCE(title_en,'') ILIKE $%d)", n, n))
+		parts = append(parts, fmt.Sprintf("(title ILIKE $%d OR COALESCE(title_en,'') ILIKE $%d)", n, n))
 	}
 
 	if exclude != "genres" && len(f.Genres) > 0 {
@@ -123,14 +118,14 @@ func (r *AnimeRepository) Create(ctx context.Context, a *models.Anime) error {
 	const q = `
 		INSERT INTO anime (
 			slug, title, title_en, description, cover, banner,
-			year, country, type, status, genres, franchise_id
+			year, country, type, status, genres, franchise_id, next_episode_at
 		)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
 		RETURNING id, rating, views, comments_count, created_at, updated_at
 	`
 	err := r.pool.QueryRow(ctx, q,
 		a.Slug, a.Title, a.TitleEn, a.Description, a.Cover, a.Banner,
-		a.Year, a.Country, string(a.Type), string(a.Status), a.Genres, a.FranchiseID,
+		a.Year, a.Country, string(a.Type), string(a.Status), a.Genres, a.FranchiseID, a.NextEpisodeAt,
 	).Scan(&a.ID, &a.Rating, &a.Views, &a.CommentsCount, &a.CreatedAt, &a.UpdatedAt)
 
 	if err != nil {
@@ -148,7 +143,7 @@ func (r *AnimeRepository) Create(ctx context.Context, a *models.Anime) error {
 const animeColumns = `
 	id, slug, title, title_en, description, cover, banner,
 	year, country, type, rating, status, genres,
-	views, comments_count, franchise_id, created_at, updated_at
+	views, comments_count, franchise_id, created_at, updated_at, next_episode_at
 `
 
 func (r *AnimeRepository) FindByID(ctx context.Context, id uuid.UUID) (*models.Anime, error) {
@@ -164,14 +159,12 @@ func (r *AnimeRepository) FindBySlug(ctx context.Context, slug string) (*models.
 func (r *AnimeRepository) List(ctx context.Context, f ListFilter) ([]models.Anime, int, error) {
 	where, args := r.buildWhere(f, "")
 
-	// Count
 	var total int
 	countQ := "SELECT COUNT(*) FROM anime " + where
 	if err := r.pool.QueryRow(ctx, countQ, args...).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("count аниме: %w", err)
 	}
 
-	// Sort
 	sortCol, ok := allowedSorts[f.Sort]
 	if !ok {
 		sortCol = "created_at"
@@ -181,7 +174,6 @@ func (r *AnimeRepository) List(ctx context.Context, f ListFilter) ([]models.Anim
 		order = "ASC"
 	}
 
-	// Limit / Offset
 	if f.Limit <= 0 || f.Limit > 100 {
 		f.Limit = 24
 	}
@@ -192,7 +184,6 @@ func (r *AnimeRepository) List(ctx context.Context, f ListFilter) ([]models.Anim
 	limitN := len(args) - 1
 	offsetN := len(args)
 
-	// Stable sort: добавляем id как tie-breaker
 	listQ := fmt.Sprintf(`
 		SELECT %s FROM anime
 		%s
@@ -218,18 +209,16 @@ func (r *AnimeRepository) List(ctx context.Context, f ListFilter) ([]models.Anim
 }
 
 // ============================================================
-// FACETS — параллельные запросы через errgroup
+// FACETS
 // ============================================================
 type FacetValue struct {
 	Value string `json:"value"`
 	Count int    `json:"count"`
 }
-
 type YearFacet struct {
 	Year  int `json:"year"`
 	Count int `json:"count"`
 }
-
 type Facets struct {
 	Total     int          `json:"total"`
 	Genres    []FacetValue `json:"genres"`
@@ -250,13 +239,11 @@ func (r *AnimeRepository) Facets(ctx context.Context, f ListFilter) (*Facets, er
 
 	g, gctx := errgroup.WithContext(ctx)
 
-	// Total — с ВСЕМИ фильтрами
 	g.Go(func() error {
 		where, args := r.buildWhere(f, "")
 		return r.pool.QueryRow(gctx, "SELECT COUNT(*) FROM anime "+where, args...).Scan(&result.Total)
 	})
 
-	// Жанры — БЕЗ фильтра по жанрам
 	g.Go(func() error {
 		where, args := r.buildWhere(f, "genres")
 		q := `SELECT g, COUNT(*) FROM anime, unnest(genres) AS g ` + where + ` GROUP BY g ORDER BY COUNT(*) DESC LIMIT 50`
@@ -275,25 +262,21 @@ func (r *AnimeRepository) Facets(ctx context.Context, f ListFilter) (*Facets, er
 		return nil
 	})
 
-	// Страны — БЕЗ фильтра по странам
 	g.Go(func() error {
 		where, args := r.buildWhere(f, "countries")
 		return r.scanFacet(gctx, `SELECT country AS v, COUNT(*) FROM anime `+where+` GROUP BY v ORDER BY COUNT(*) DESC`, args, &result.Countries)
 	})
 
-	// Типы — БЕЗ фильтра по типам
 	g.Go(func() error {
 		where, args := r.buildWhere(f, "types")
 		return r.scanFacet(gctx, `SELECT type AS v, COUNT(*) FROM anime `+where+` GROUP BY v ORDER BY COUNT(*) DESC`, args, &result.Types)
 	})
 
-	// Статусы — БЕЗ фильтра по статусам
 	g.Go(func() error {
 		where, args := r.buildWhere(f, "statuses")
 		return r.scanFacet(gctx, `SELECT status AS v, COUNT(*) FROM anime `+where+` GROUP BY v ORDER BY COUNT(*) DESC`, args, &result.Statuses)
 	})
 
-	// Годы — БЕЗ фильтра по годам
 	g.Go(func() error {
 		where, args := r.buildWhere(f, "years")
 		q := `SELECT year, COUNT(*) FROM anime ` + where + ` GROUP BY year ORDER BY year DESC LIMIT 30`
@@ -342,13 +325,13 @@ func (r *AnimeRepository) Update(ctx context.Context, a *models.Anime) error {
 		UPDATE anime SET
 			title = $2, title_en = $3, description = $4,
 			cover = $5, banner = $6, year = $7, country = $8,
-			type = $9, status = $10, genres = $11, franchise_id = $12
+			type = $9, status = $10, genres = $11, franchise_id = $12, next_episode_at = $13
 		WHERE id = $1
 		RETURNING updated_at
 	`
 	err := r.pool.QueryRow(ctx, q,
 		a.ID, a.Title, a.TitleEn, a.Description, a.Cover, a.Banner,
-		a.Year, a.Country, string(a.Type), string(a.Status), a.Genres, a.FranchiseID,
+		a.Year, a.Country, string(a.Type), string(a.Status), a.Genres, a.FranchiseID, a.NextEpisodeAt,
 	).Scan(&a.UpdatedAt)
 
 	if err != nil {
@@ -371,13 +354,11 @@ func (r *AnimeRepository) Delete(ctx context.Context, id uuid.UUID) error {
 	return nil
 }
 
-// IncrementViews — атомарный инкремент
 func (r *AnimeRepository) IncrementViews(ctx context.Context, animeID uuid.UUID) error {
 	_, err := r.pool.Exec(ctx, `UPDATE anime SET views = views + 1 WHERE id = $1`, animeID)
 	return err
 }
 
-// IncrementViewsByEpisode — инкремент счётчика аниме через episode_id
 func (r *AnimeRepository) IncrementViewsByEpisode(ctx context.Context, episodeID uuid.UUID) error {
 	_, err := r.pool.Exec(ctx, `
 		UPDATE anime SET views = views + 1
@@ -396,7 +377,7 @@ func (r *AnimeRepository) scanOne(row pgx.Row) (*models.Anime, error) {
 		&a.ID, &a.Slug, &a.Title, &a.TitleEn, &a.Description,
 		&a.Cover, &a.Banner, &a.Year, &a.Country, &typeStr, &a.Rating,
 		&statusStr, &a.Genres, &a.Views, &a.CommentsCount, &a.FranchiseID,
-		&a.CreatedAt, &a.UpdatedAt,
+		&a.CreatedAt, &a.UpdatedAt, &a.NextEpisodeAt,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -416,7 +397,7 @@ func (r *AnimeRepository) scanRow(rows pgx.Rows) (*models.Anime, error) {
 		&a.ID, &a.Slug, &a.Title, &a.TitleEn, &a.Description,
 		&a.Cover, &a.Banner, &a.Year, &a.Country, &typeStr, &a.Rating,
 		&statusStr, &a.Genres, &a.Views, &a.CommentsCount, &a.FranchiseID,
-		&a.CreatedAt, &a.UpdatedAt,
+		&a.CreatedAt, &a.UpdatedAt, &a.NextEpisodeAt,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("scan row аниме: %w", err)

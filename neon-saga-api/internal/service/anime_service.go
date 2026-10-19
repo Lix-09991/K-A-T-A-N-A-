@@ -5,6 +5,7 @@ import (
 	"errors"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -24,18 +25,19 @@ func NewAnimeService(animeRepo *repository.AnimeRepository, epRepo *repository.E
 }
 
 type CreateAnimeInput struct {
-	Slug        string
-	Title       string
-	TitleEn     *string
-	Description string
-	Cover       *string
-	Banner      *string
-	Year        int
-	Country     string
-	Type        models.AnimeType
-	Status      models.AnimeStatus
-	Genres      []string
-	FranchiseID *uuid.UUID
+	Slug          string
+	Title         string
+	TitleEn       *string
+	Description   string
+	Cover         *string
+	Banner        *string
+	Year          int
+	Country       string
+	Type          models.AnimeType
+	Status        models.AnimeStatus
+	Genres        []string
+	FranchiseID   *uuid.UUID
+	NextEpisodeAt *time.Time
 }
 
 type UpdateAnimeInput = CreateAnimeInput
@@ -55,18 +57,19 @@ func (s *AnimeService) Create(ctx context.Context, in CreateAnimeInput) (*models
 	}
 
 	a := &models.Anime{
-		Slug:        in.Slug,
-		Title:       in.Title,
-		TitleEn:     in.TitleEn,
-		Description: in.Description,
-		Cover:       in.Cover,
-		Banner:      in.Banner,
-		Year:        in.Year,
-		Country:     in.Country,
-		Type:        in.Type,
-		Status:      in.Status,
-		Genres:      in.Genres,
-		FranchiseID: in.FranchiseID,
+		Slug:          in.Slug,
+		Title:         in.Title,
+		TitleEn:       in.TitleEn,
+		Description:   in.Description,
+		Cover:         in.Cover,
+		Banner:        in.Banner,
+		Year:          in.Year,
+		Country:       in.Country,
+		Type:          in.Type,
+		Status:        in.Status,
+		Genres:        in.Genres,
+		FranchiseID:   in.FranchiseID,
+		NextEpisodeAt: in.NextEpisodeAt,
 	}
 	if a.Genres == nil {
 		a.Genres = []string{}
@@ -89,7 +92,6 @@ func (s *AnimeService) GetByID(ctx context.Context, id uuid.UUID) (*models.Anime
 	if err != nil {
 		return nil, nil, err
 	}
-	// Async increment views
 	go func() {
 		_ = s.animeRepo.IncrementViews(context.Background(), id)
 	}()
@@ -120,6 +122,7 @@ func (s *AnimeService) Update(ctx context.Context, id uuid.UUID, in UpdateAnimeI
 	a.Status = in.Status
 	a.Genres = in.Genres
 	a.FranchiseID = in.FranchiseID
+	a.NextEpisodeAt = in.NextEpisodeAt
 
 	if err := s.animeRepo.Update(ctx, a); err != nil {
 		return nil, err

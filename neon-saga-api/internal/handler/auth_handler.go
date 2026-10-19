@@ -1,14 +1,13 @@
 package handler
 
 import (
-	"encoding/json"
 	"errors"
 	"net/http"
 
-	"github.com/go-playground/validator/v10"
-
+	custommw "github.com/Lix-09991/neon-saga-api/internal/middleware"
 	"github.com/Lix-09991/neon-saga-api/internal/repository"
 	"github.com/Lix-09991/neon-saga-api/internal/service"
+	"github.com/go-playground/validator/v10"
 )
 
 type AuthHandler struct {
@@ -21,6 +20,33 @@ func NewAuthHandler(authService *service.AuthService) *AuthHandler {
 		authService: authService,
 		validate:    validator.New(),
 	}
+}
+
+// ============================================================
+// COOKIE HELPERS
+// ============================================================
+func setAuthCookie(w http.ResponseWriter, token string) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     "token",
+		Value:    token,
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   false, // true на production (HTTPS)
+		SameSite: http.SameSiteLaxMode,
+		MaxAge:   7 * 24 * 60 * 60, // 7 дней
+	})
+}
+
+func clearAuthCookie(w http.ResponseWriter) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     "token",
+		Value:    "",
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   false,
+		SameSite: http.SameSiteLaxMode,
+		MaxAge:   -1,
+	})
 }
 
 // ============================================================
@@ -47,7 +73,7 @@ type authResponse struct {
 // ============================================================
 func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 	var req registerRequest
-	if !h.decodeAndValidate(w, r, &req) {
+	if !decodeAndValidate(w, r, h.validate, &req) {
 		return
 	}
 
@@ -68,12 +94,13 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	setAuthCookie(w, token)
 	writeJSON(w, http.StatusCreated, authResponse{User: user, Token: token})
 }
 
 func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	var req loginRequest
-	if !h.decodeAndValidate(w, r, &req) {
+	if !decodeAndValidate(w, r, h.validate, &req) {
 		return
 	}
 
@@ -90,20 +117,29 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	setAuthCookie(w, token)
 	writeJSON(w, http.StatusOK, authResponse{User: user, Token: token})
 }
 
-// ============================================================
-// HELPERS
-// ============================================================
-func (h *AuthHandler) decodeAndValidate(w http.ResponseWriter, r *http.Request, dst interface{}) bool {
-	if err := json.NewDecoder(r.Body).Decode(dst); err != nil {
-		writeError(w, http.StatusBadRequest, "невалидный JSON")
-		return false
+func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
+	clearAuthCookie(w)
+	writeJSON(w, http.StatusOK, map[string]string{"message": "вы вышли"})
+}
+
+// GET /api/v1/auth/me — получить текущего пользователя
+func (h *AuthHandler) Me(w http.ResponseWriter, r *http.Request) {
+	userFromCtx, ok := custommw.UserFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "не авторизован")
+		return
 	}
-	if err := h.validate.Struct(dst); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return false
+
+	// Подтягиваем полные данные из БД (с датами)
+	user, err := h.authService.GetUserByID(r.Context(), userFromCtx.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "ошибка получения профиля")
+		return
 	}
-	return true
+
+	writeJSON(w, http.StatusOK, user)
 }

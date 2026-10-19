@@ -13,4 +13,5 @@ ALTER TABLE anime
     DROP COLUMN IF EXISTS comments_count,
     DROP COLUMN IF EXISTS views,
     DROP COLUMN IF EXISTS type,
-    DROP COLUMN IF EXISTS country;
+    DROP COLUMN IF EXISTS country;npm install clsx tailwind-merge
+npm run dev

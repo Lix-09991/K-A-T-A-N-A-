@@ -90,7 +90,7 @@ FOR EACH ROW
 EXECUTE FUNCTION update_anime_comments_count();
 
 -- ============================================================
--- updated_at триггеры для новых таблиц
+-- updated_at триггеры 
 -- ============================================================
 CREATE TRIGGER franchises_updated_at BEFORE UPDATE ON franchises
     FOR EACH ROW EXECUTE FUNCTION set_updated_at();
