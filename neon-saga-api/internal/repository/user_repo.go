@@ -38,11 +38,11 @@ func (r *UserRepository) Create(ctx context.Context, u *models.User) error {
 	).Scan(&u.ID, &u.CreatedAt, &u.UpdatedAt)
 
 	if err != nil {
-		if isUniqueViolation(err, "users_email_key") {
-			return ErrEmailTaken
-		}
 		if isUniqueViolation(err, "users_username_key") {
 			return ErrUsernameTaken
+		}
+		if isUniqueViolation(err, "users_email_key") {
+			return ErrEmailTaken
 		}
 		return fmt.Errorf("создание пользователя: %w", err)
 	}
@@ -92,7 +92,6 @@ func (r *UserRepository) scanUser(row pgx.Row) (*models.User, error) {
 	return &u, nil
 }
 
-// isUniqueViolation — проверка на нарушение уникальности (PostgreSQL код 23505)
 func isUniqueViolation(err error, constraint string) bool {
 	if err == nil {
 		return false

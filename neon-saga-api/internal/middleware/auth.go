@@ -16,17 +16,14 @@ type contextKey string
 
 const UserContextKey contextKey = "user"
 
-// RequireAuth — проверяет JWT в заголовке Authorization: Bearer <token>
 func RequireAuth(jwtSecret []byte) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// 1. Пробуем Authorization header
 			tokenStr := ""
 			authHeader := r.Header.Get("Authorization")
 			if authHeader != "" && strings.HasPrefix(authHeader, "Bearer ") {
 				tokenStr = strings.TrimPrefix(authHeader, "Bearer ")
 			} else {
-				// 2. Fallback на cookie
 				cookie, err := r.Cookie("token")
 				if err == nil {
 					tokenStr = cookie.Value
@@ -62,9 +59,15 @@ func RequireAuth(jwtSecret []byte) func(http.Handler) http.Handler {
 				return
 			}
 
+			// Безопасно достаем email как указатель (на случай, если его нет)
+			var email *string
+			if e, ok := claims["email"].(string); ok && e != "" {
+				email = &e
+			}
+
 			user := &models.User{
 				ID:       userID,
-				Email:    asString(claims["email"]),
+				Email:    email,
 				Username: asString(claims["username"]),
 				Role:     models.Role(asString(claims["role"])),
 			}
@@ -75,7 +78,6 @@ func RequireAuth(jwtSecret []byte) func(http.Handler) http.Handler {
 	}
 }
 
-// UserFromContext — достаёт юзера из контекста
 func UserFromContext(ctx context.Context) (*models.User, bool) {
 	u, ok := ctx.Value(UserContextKey).(*models.User)
 	return u, ok
